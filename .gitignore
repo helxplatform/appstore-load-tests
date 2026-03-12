@@ -142,3 +142,10 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Playwright artifacts
+screenshots/
+videos/
+
+# Test account credentials
+payloads/test-users/*
