@@ -1,0 +1,19 @@
+# AI Sandbox deployment configuration.
+# Specialized for AI/ML workloads with extended Jupyter testing.
+
+target: https://ai-sandbox.renci.org
+appReadyTimeout: 180000
+appTeardownTimeout: 30000
+
+useStaffLogin: true
+
+load:
+  duration: 60
+  arrivalCount: 10
+
+apps:
+  - appName: Jupyter HeLx Tensorflow Notebook
+    weight: 1
+    tests:
+      - name: basic-ai-sandbox
+        weight: 1

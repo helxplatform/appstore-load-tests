@@ -1,0 +1,33 @@
+config:
+  target: "{{ $env.ARTILLERY_TARGET }}"
+  engines:
+    playwright:
+      launchOptions:
+        headless: true
+  processor: "../playwright-tests/flows.js"
+  payload:
+    path: "../payloads/test-users/users_test.txt"
+    fields:
+      - "username"
+      - "password"
+      - "email"
+    order: sequence
+  environments:
+    load:
+      phases:
+        - duration: "{{ $env.ARTILLERY_DURATION }}"
+          arrivalCount: "{{ $env.ARTILLERY_ARRIVAL_COUNT }}"
+    smoke:
+      phases:
+        - duration: 1
+          arrivalCount: 1
+  plugins:
+    ensure: {}
+  ensure:
+    conditions:
+      - expression: vusers.failed == 0
+
+scenarios:
+  - name: "Full User Flow"
+    engine: playwright
+    testFunction: "fullUserFlow"

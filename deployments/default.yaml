@@ -1,0 +1,22 @@
+# Default deployment configuration.
+# Used when no deployment is specified or as fallback.
+# Other deployments inherit these values unless overridden.
+
+target: http://localhost:8000
+appReadyTimeout: 180000  # 3 minutes
+appTeardownTimeout: 30000
+
+# If form-based Django login is not available on the deployment,
+# you can use login in admin portal as fallback if test accounts have staff status
+useStaffLogin: false
+
+load:
+  duration: 60      # seconds
+  arrivalCount: 10  # virtual users created over duration
+
+apps:
+  - appName: Jupyter HeLx Notebook
+    weight: 1
+    tests:
+      - name: basic
+        weight: 1

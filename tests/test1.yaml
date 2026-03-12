@@ -1,0 +1,119 @@
+config:
+  target: "{{ $env.ARTILLERY_TARGET }}"
+  http:
+    timeout: 10
+  processor: "../helpers.js"
+  payload:
+    # User records should be created in the DB prior to running tests.
+    path: "../payloads/test-users/users_test.txt"
+    fields:
+      - "username"
+      - "password"
+      - "email"
+    # Select a new user row each time a virtual user logs in.
+    order: random
+  environments:
+    load:
+      phases:
+        - duration: "{{ $env.ARTILLERY_DURATION }}"
+          arrivalCount: "{{ $env.ARTILLERY_ARRIVAL_COUNT }}"
+    smoke:
+      phases:
+        - duration: 1
+          arrivalCount: 1
+  plugins:
+    expect:
+      reportFailuresAsErrors: true
+    ensure: {}
+  ensure:
+    conditions:
+      - expression: errors.ETIMEDOUT == undefined
+      - expression: errors.ECONNREFUSED == undefined
+      - expression: vusers.failed == 0
+
+scenarios:
+  - name: "Full User Flow: Login, Spawn, Delete"
+    beforeRequest: "setXCSRF"
+    flow:
+      - log: "Step 1: Get CSRF token"
+      - get:
+          url: "/admin/login/"
+          expect:
+            - statusCode: 200
+      - log: "Step 2: Login"
+      - post:
+          url: "/accounts/login/"
+          formData:
+            login: "{{ username }}"
+            password: "{{ password }}"
+          expect:
+            - statusCode: 302
+            - hasHeader: set-cookie
+          followRedirect: false
+      - log: "Step 3: Get initial app state"
+      - get:
+          url: "/api/v1/instances/"
+          expect:
+            - statusCode: 200
+          afterResponse:
+            - parseInitialApps
+      - log: "Step 4: Getting available app definitions"
+      - get:
+          url: "/api/v1/apps/"
+          expect:
+            - statusCode: 200
+          capture:
+            - json: "$"
+              as: available_apps
+          afterResponse:
+            - getRandomApp
+      - log: "Step 5: Spawning an app [{{ random_app.app_id }}]"
+      - post:
+          url: "/api/v1/instances/"
+          json:
+            app_id: "{{ random_app.app_id }}"
+            cpus: "{{ random_app.minimum_resources.cpus }}"
+            memory: "{{ random_app.minimum_resources.memory }}"
+            gpus: "{{ random_app.minimum_resources.gpus }}"
+          expect:
+            - statusCode: 200
+          capture:
+            - json: "$.app_id"
+              as: spawned_aid
+            - json: "$.sid"
+              as: spawned_sid
+      - log: "Step 6: Verifying app is created [{{ random_app.app_id }}]"
+      - get:
+          url: "/api/v1/instances/"
+          capture:
+            - json: "$..[?(@.sid=='{{ spawned_sid }}')].sid"
+              as: found_sid
+          expect:
+            - statusCode: 200
+            - equals:
+                - "{{ spawned_sid }}"
+                - "{{ found_sid }}"
+      - sleep: 10
+      - log: "Step 7: Deleting app [{{ random_app.app_id }}]"
+      - delete:
+          url: "/api/v1/instances/{{ spawned_sid }}/"
+          expect:
+            - statusCode: [200, 204]
+      - log: "Step 8: Confirming app deletion"
+      - get:
+          url: "/api/v1/instances/"
+          capture:
+            - json: "$..[?(@.sid=='{{ spawned_sid }}')].sid"
+              as: "existing_sid"
+              strict: false
+          expect:
+            - statusCode: 200
+            - equals:
+              - "{{ existing_sid }}"
+              - undefined
+      - log: "Step 9: Logging out"
+      - post:
+          url: "/accounts/logout/"
+          expect:
+            - statusCode: [200, 302]
+          followRedirect: false

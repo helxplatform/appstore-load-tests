@@ -1,0 +1,19 @@
+{
+  "name": "artillery-tests",
+  "version": "1.0.0",
+  "description": "",
+  "main": "helpers.js",
+  "scripts": {
+    "smoke": "ls -1 ./tests | xargs -L1 -I{} npx artillery run tests/{} --quiet --environment smoke"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@playwright/test": "^1.58.2",
+    "artillery": "^2.0.30",
+    "artillery-plugin-ensure": "^1.24.0",
+    "js-yaml": "^4.1.1",
+    "lodash.merge": "^4.6.2"
+  }
+}
