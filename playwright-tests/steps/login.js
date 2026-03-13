@@ -23,7 +23,6 @@ class LoginStep extends Step {
         if (useStaffLogin) {
             await loginPage.navigateToAdminURL();
             await loginPage.adminLogin(username, password);
-
             await loginPage.verifyLoginSuccess();
             
             await loginPage.navigateToBaseURL();
@@ -32,7 +31,6 @@ class LoginStep extends Step {
             await loginPage.navigateToBaseURL();
             await loginPage.goToLogin();
             await loginPage.formLogin(username, password);
-
             await loginPage.verifyLoginSuccess();
             
             // Check that login has completed successfully.

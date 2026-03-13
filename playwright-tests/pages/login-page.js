@@ -43,9 +43,6 @@ class LoginPage {
         ).toBeVisible({ timeout: TIMEOUTS.medium });
     }
 
-    /**
-     * Does NOT confirm login has finished or succeeded.
-     */
     async formLogin(username, password) {
         await this.usernameField.fill(username);
         await this.passwordField.fill(password);
@@ -58,12 +55,11 @@ class LoginPage {
         await this.adminSubmitButton.click();
     }
 
-    async verifyLoginSuccess() {
-        const res = await this.page.request.get(`/api/v1/users/`);
+    async verifyLoginSuccess(timeout=TIMEOUTS.veryLong) {
         await expect(
-            res,
-            "User is not logged in"
-        ).toBeOK();
+            this.page.getByText("log out"),
+            "Could not verify login success, log out button did not appear"
+        ).toBeVisible({ timeout });
     }
 }
 

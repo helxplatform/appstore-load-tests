@@ -8,7 +8,7 @@ appTeardownTimeout: 30000
 useStaffLogin: true
 
 load:
-  duration: 60
+  duration: 120
   arrivalCount: 10
 
 apps:

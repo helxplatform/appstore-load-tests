@@ -4,7 +4,7 @@
 
 const SELECTORS = {
     navbar: {
-        workspaces: "text=Workspaces",
+        workspaces: "header a[href='/helx/workspaces']",
     },
     login: {
         form: "div.login-form",

@@ -1,5 +1,5 @@
 const { expect } = require("@playwright/test");
-const { TIMEOUTS, SELECTORS } = require("./selectors");
+const { TIMEOUTS, SELECTORS, DIALOG_RULES } = require("./selectors");
 
 // Zero-width space prefix makes markers visually unobtrusive and unlikely to collide
 const MARKER_PREFIX = '# MARKER_';
@@ -39,7 +39,7 @@ class CellHandle {
     await page.keyboard.insertText(markerComment);
 
     // Let codemirror and jupyter state sync
-    await page.waitForTimeout(2500);
+    await page.waitForTimeout(1000);
 
     return handle;
   }
@@ -55,6 +55,8 @@ class CellHandle {
     await codeMirror.focus();
 
     await expect(cell.locator(SELECTORS.codeMirrorFocus)).toBeVisible({ timeout: TIMEOUTS.medium });
+    // Let codemirror and jupyter state sync
+    await this.page.waitForTimeout(1000);
   }
 
   /**
@@ -71,7 +73,7 @@ class CellHandle {
     await expect(this.cellLocator).toContainText(code, { timeout: TIMEOUTS.short });
 
     // Let codemirror and jupyter state sync
-    await this.page.waitForTimeout(2500);
+    await this.page.waitForTimeout(1000);
   }
 
   /**
@@ -88,13 +90,18 @@ class CellHandle {
     await this.page.keyboard.press("Shift+Enter");
 
     await this.page.screenshot({ path: 'screenshots/beforeexecute.png' })
+    try {
     // Wait for execution to complete (prompt changes to `[N]:`)
-    await expect.poll(async () => {
-      const currentPromptText = (await this.inputPrompt.innerText()).trim();
-      const isNumber = /^\[\d+\]:$/.test(currentPromptText);
-      const isNew = currentPromptText !== initialPromptText.trim();
-      return isNumber && isNew;
-    }, { timeout }).toBe(true);
+      await expect.poll(async () => {
+        const currentPromptText = (await this.inputPrompt.innerText()).trim();
+        const isNumber = /^\[\d+\]:$/.test(currentPromptText);
+        const isNew = currentPromptText !== initialPromptText.trim();
+        return isNumber && isNew;
+      }, { timeout }).toBe(true);
+    } catch (e) {
+      await this.page.screenshot({ path: 'screenshots/executefail.png' })
+      throw e
+    }
 
     await this.page.screenshot({ path: 'screenshots/afterexecute.png' })
     
@@ -108,28 +115,108 @@ class CellHandle {
   }
 }
 
+/**
+ * Background watcher that automatically dismisses JupyterLab dialogs as they appear.
+ */
+class DialogWatcher {
+  constructor(page, { pollInterval = 500, fallbackAction = "reject", logPrefix = "JupyterDialogWatcher" } = {}) {
+    this.page = page;
+    this.pollInterval = pollInterval;
+    this.fallbackAction = fallbackAction;
+    this.logPrefix = logPrefix;
+
+    this._running = false;
+    this._loopPromise = null;
+
+    // Pre-build locators
+    this._dialogLocator = page.locator(SELECTORS.dialog);
+    this._dialogContentLocator = page.locator(SELECTORS.dialogContent);
+    this._acceptBtn = page.locator(SELECTORS.dialogAccept);
+    this._rejectBtn = page.locator(SELECTORS.dialogReject);
+  }
+
+  /** Start the background polling loop. Safe to call multiple times. */
+  start() {
+    if (this._running) return;
+    this._running = true;
+    this._loopPromise = this._poll();
+  }
+
+  /** Stop the polling loop. Returns once the current iteration (if any) finishes. */
+  async stop() {
+    this._running = false;
+    if (this._loopPromise) {
+      await this._loopPromise;
+      this._loopPromise = null;
+    }
+  }
+
+  /** @private */
+  async _poll() {
+    while (this._running) {
+      try {
+        const visible = await this._dialogLocator.isVisible().catch(() => false);
+        if (visible) {
+          await this._handleDialog();
+        }
+      } catch {
+        // Page may have been closed / navigated — silently ignore.
+      }
+      // Sleep before next check.
+      await new Promise((r) => setTimeout(r, this.pollInterval));
+    }
+  }
+
+  /** @private */
+  async _handleDialog() {
+    // Read the visible text of the dialog to match against rules.
+    const dialogText = await this._dialogContentLocator.innerText().catch(() => "");
+
+    // Find the first matching rule.
+    const rule = DIALOG_RULES.find((r) => dialogText.includes(r.textMatch));
+    const action = rule ? rule.action : this.fallbackAction;
+    const ruleName = rule ? rule.name : "Unknown";
+
+    console.log(`[${this.logPrefix}] Dialog detected — "${ruleName}" → ${action}`);
+
+    const btn = action === "accept" ? this._acceptBtn : this._rejectBtn;
+
+    // Click if the target button is present; some dialogs may only have one button.
+    if (await btn.isVisible().catch(() => false)) {
+      await btn.click();
+    } else {
+      // If preferred button is missing, try the other one.
+      const altBtn = action === "accept" ? this._rejectBtn : this._acceptBtn;
+      if (await altBtn.isVisible().catch(() => false)) {
+        console.log(`[${this.logPrefix}] Preferred button not found, using alternate`);
+        await altBtn.click();
+      }
+    }
+
+    // Wait briefly for the dialog to fully close before resuming the loop.
+    await this._dialogLocator.waitFor({ state: "hidden", timeout: TIMEOUTS.medium }).catch(() => {});
+  }
+}
+
 class JupyterLabPage {
   constructor(page, baseURL) {
     this.page = page;
     this.baseURL = baseURL;
+
+    // --- Background Dialog Watcher ---
+    this.dialogWatcher = new DialogWatcher(page);
 
     // --- Core Locators ---
     this.mainContainer = page.locator("#main");
     this.activeTab = page.locator(SELECTORS.activeTab);
     this.launcherTab = page.locator(`${SELECTORS.activeTab}:has-text("Launcher")`);
     this.tabCloseButtons = page.locator(SELECTORS.tabCloseButton);
-    
-    // --- Dialog Locators ---
-    this.dialog = page.locator(SELECTORS.dialog);
-    this.saveDialog = page.locator(SELECTORS.dialogSaveNotebook);
-    this.dontSaveBtn = this.saveDialog.locator(SELECTORS.dialogReject);
-    this.kernelDialog = page.locator(SELECTORS.dialogSelectKernel);
-    this.acceptKernelBtn = this.kernelDialog.locator(SELECTORS.dialogAccept);
-    
+
     // --- Notebook & Cell Locators ---
     this.launcherPythonCard = page.locator(SELECTORS.launcherPythonNotebook).first();
     this.notebook = page.locator(SELECTORS.notebook);
     this.kernelIdle = page.locator(SELECTORS.kernelIdle);
+    this.kernelPython = page.locator(SELECTORS.kernelPython);
     this.cells = page.locator(SELECTORS.cell);
     this.createCellBtn = page.locator(SELECTORS.notebookToolbar).locator(SELECTORS.createCellButton);
   }
@@ -138,8 +225,8 @@ class JupyterLabPage {
   // Navigation & Lifecycle Methods
   // ==========================================
 
-  async navigateToRoot() {
-    await this.page.goto(this.baseURL);
+  async navigateToNewWorkspace() {
+    await this.page.goto(`${this.baseURL}lab/workspaces/auto?reset`);
     await expect(this.mainContainer).toBeVisible({ timeout: TIMEOUTS.initialPageLoad });
   }
 
@@ -152,6 +239,16 @@ class JupyterLabPage {
       await this.page.screenshot({ path: "screenshots/uifailready.png" })
       throw e
     }
+
+    // Start the background dialog watcher now that the UI is interactive.
+    this.dialogWatcher.start();
+  }
+
+  /**
+   * Stop background processes (dialog watcher). Call during test teardown.
+   */
+  async destroy() {
+    await this.dialogWatcher.stop();
   }
 
   // ==========================================
@@ -166,19 +263,16 @@ class JupyterLabPage {
     for (let i=0; i<initialCount; i++) {
       const currentCount = await this.tabCloseButtons.count();
       await this.tabCloseButtons.first().click();
-      
-      // Handle "Don't Save" dialog if it appears
-      if (await this.dontSaveBtn.isVisible({ timeout: TIMEOUTS.short }).catch(() => false)) {
-          await this.dontSaveBtn.click();
-          // Verify dialog gone
-          await expect(this.dialog).toBeHidden({ timeouts: TIMEOUTS.short });
-      }
+
       // Verify tab count decrements
-      await expect(this.tabCloseButtons).toHaveCount(currentCount - 1, { timeout: TIMEOUTS.long });
+      // (if only 1 initial tab, a new one will be created immediately after closing it).
+      if (initialCount > 1) {
+        await expect(this.tabCloseButtons).toHaveCount(currentCount - 1, { timeout: TIMEOUTS.long });
+      }
     }
-    
+
     await this.page.screenshot({ path: "screenshots/closetabsend.png" });
-    await this.assertLauncherActive(TIMEOUTS.long);
+    await this.assertLauncherActive(TIMEOUTS.veryLong);
   }
 
   // ==========================================
@@ -194,20 +288,17 @@ class JupyterLabPage {
     await this.launcherPythonCard.click();
 
     // Verify we are in a new notebook
-    await this.assertNotebookActive(TIMEOUTS.long);
+    await this.assertNotebookActive(TIMEOUTS.veryLong);
 
-    // Wait for kernel to become idle
-    await expect(this.kernelIdle).toBeVisible({ timeout: TIMEOUTS.veryLong });
-
-    // Handle "Select Kernel" dialog if it appears
-    if (await this.acceptKernelBtn.isVisible({ timeout: TIMEOUTS.medium }).catch(() => false)) {
-        await this.acceptKernelBtn.click();
-        // Verify dialog gone
-        await expect(this.dialog).toBeHidden({ timeouts: TIMEOUTS.short });
-    }
-    
     // Ensure the initial cell is automatically created on the notebook (further indicates readiness).
-    await expect(this.cells.first()).toBeVisible({ timeout: TIMEOUTS.long });
+    // The jupyter notebook may remain in loading state (spinner) for a little bit.
+    await expect(this.cells.first()).toBeVisible({ timeout: TIMEOUTS.veryLong });
+
+    // Any dialog (e.g. "Select Kernel") is handled by the background DialogWatcher.
+
+    // Wait for Python kernel to become selected and idle.
+    await expect(this.kernelPython).toBeVisible({ timeout: TIMEOUTS.veryLong });
+    await expect(this.kernelIdle).toBeVisible({ timeout: TIMEOUTS.superLong });
   }
 
   /**
@@ -249,5 +340,6 @@ class JupyterLabPage {
 
 module.exports = {
   JupyterLabPage,
-  CellHandle
+  CellHandle,
+  DialogWatcher
 };

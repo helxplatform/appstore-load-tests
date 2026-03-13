@@ -16,8 +16,7 @@ class WorkspacesPage {
 
         // Active
         this.activeTable = page.locator(SELECTORS.workspaces.activeTable);
-        this.activeAppRows = page.locator("tr");
-        this.activeAppDataCells = page.locator("td");
+        this.activeAppRows = this.activeTable.locator("tr");
         this.noInstancesText = page.locator(SELECTORS.workspaces.noInstancesText);
         this.activeContent = this.activeTable.or(this.noInstancesText);
         this.stopAllButton = page.locator(SELECTORS.workspaces.stopAllButton);
@@ -41,7 +40,7 @@ class WorkspacesPage {
       await this.selectTab("Active");
     }
 
-    async verifyTabSelected(tabName, timeout=TIMEOUTS.MEDIUM) {
+    async verifyTabSelected(tabName, timeout=TIMEOUTS.medium) {
       try {
         await expect(
           this.tabsNavbar.locator(SELECTORS.workspaces.tabSelected), 
@@ -88,12 +87,6 @@ class WorkspacesPage {
 
     async stopAllApps(timeout=TIMEOUTS.superLong) {
       await this.verifyActiveTabLoaded();
-      
-      const noApps = await this.isActiveTabEmpty();
-      await expect(
-        noApps,
-        "Active tab has no running apps, cannot stop apps."
-      ).toBe(false);
 
       await this.stopAllButton.click();
 
@@ -103,7 +96,10 @@ class WorkspacesPage {
       ).toBeVisible({ timeout: TIMEOUTS.short });
       await this.stopAllConfirmButton.click();
 
-      await this.isActiveTabEmpty();
+      await expect(
+        this.activeTable,
+        "Active apps table did not disappear after clicking all stop instances."
+      ).toBeHidden({ timeout });
     }
 
     async launchApp(appName) {
@@ -122,7 +118,7 @@ class WorkspacesPage {
       await this.verifyActiveTabLoaded();
 
       const row = this.activeAppRows.filter({
-        has: this.activeAppDataCells.filter({ hasText: appName })
+        has: this.page.locator("td", { hasText: appName })
       });
 
       await expect(
@@ -146,35 +142,41 @@ class WorkspacesPage {
       const readyLocator = row.locator(SELECTORS.activeApps.statusReady);
       const failedLocator = row.locator(SELECTORS.activeApps.statusFailed);
 
-      const result = await Promise.race([
-        readyLocator.waitFor({ state: 'visible', timeout: 0 }).then(() => 'ready').catch(() => null),
-        failedLocator.waitFor({ state: 'visible', timeout: 0 }).then(() => 'failed').catch(() => null),
-      ]);
-
-      return result || 'loading';
+      if (await readyLocator.isVisible()) return 'ready';
+      if (await failedLocator.isVisible()) return 'failed';
+      return 'loading';
     }
 
     async waitForAppReady(appName, timeout, pollInterval = 2000) {
       await this.verifyActiveTabLoaded();
-      
+
       const startTime = Date.now();
-
-      while (Date.now() - startTime < timeout) {
-        const status = await this.getAppStatus(appName);
-
-        if (status === 'ready') {
-          return Date.now() - startTime;
+      await expect.poll(
+        async () => this.getAppStatus(appName),
+        {
+          timeout,
+          intervals: [pollInterval],
+          message: `App ${appName} failed to become ready within ${Math.round(timeout / 1000)}s`
         }
+      ).toBe('ready');
+      return Date.now() - startTime;
+    }
 
-        if (status === 'failed') {
-          await this.page.screenshot({ path: "failedappstart.png" });
-          throw new Error(`App ${appName} failed to start (status: exception)`);
-        }
+    async connectToApp(appRow, timeout = TIMEOUTS.veryLong) {
+      const browserContext = this.page.context();
+      const pagePromise = browserContext.waitForEvent('page');
 
-        await this.page.waitForTimeout(pollInterval);
-      }
+      await appRow.locator(SELECTORS.activeApps.connectButton).click();
 
-      throw new Error(`App ${appName} failed to become ready within ${Math.round(timeout / 1000)}s`);
+      const appPage = await pagePromise;
+      await appPage.bringToFront();
+
+      await appPage.waitForURL(/\/private\//, {
+        timeout,
+        waitUntil: 'domcontentloaded'
+      });
+
+      return appPage;
     }
 }
 

@@ -1,4 +1,5 @@
-const { StepRunner, createStepContext } = require("./lib/steps");
+const path = require("path");
+const { StepRunner, createStepContext, normalizeMetricName } = require("./lib/steps");
 const { DeploymentConfig } = require("./lib/deployment-config");
 const { registry } = require("./lib/app-test-registry");
 const {
@@ -13,6 +14,33 @@ const {
     TeardownAppStep,
     GetAppBaseURLStep,
 } = require("./steps");
+
+const VIDEO_DIR = path.resolve(__dirname, "..", "videos");
+
+/**
+ * Delete recorded video for a page.
+ */
+async function deleteVideo(page) {
+    try {
+        await page.video()?.delete();
+    } catch (_) {
+        // No video to delete
+    }
+}
+
+/**
+ * Save a page's recorded video to a named file, then remove the original.
+ * The page must already be closed before calling this.
+ */
+async function saveVideoAs(page, filename) {
+    try {
+        await page.video()?.saveAs(path.join(VIDEO_DIR, filename));
+        // Delete old video file (remains on fs).
+        await deleteVideo(page);
+    } catch (_) {
+        // No video to save
+    }
+}
 
 /**
  * Main test flow using step-based execution.
@@ -32,6 +60,7 @@ async function fullUserFlow(page, vuContext, events, _test) {
     const ctx = createStepContext(page, vuContext, events);
     const runner = new StepRunner(ctx);
     const deploymentName = process.env.DEPLOYMENT_NAME || "default";
+    const username = vuContext.vars.username;
 
     // Load and validate deployment config
     const config = new DeploymentConfig(deploymentName);
@@ -58,6 +87,7 @@ async function fullUserFlow(page, vuContext, events, _test) {
             `Config apps: ${config.apps.map(a => a.appName).join(", ")}. ` +
             `Available apps: ${ctx.state.availableApps.join(", ")}`
         );
+        await deleteVideo(page);
         return;
     }
 
@@ -76,15 +106,48 @@ async function fullUserFlow(page, vuContext, events, _test) {
     // Phase 2: Cleanup
     await runner.run(new CleanupDanglingAppsStep());
 
-    // Phase 3: Launch app and run test
-    await runner.runAll([
-        new LaunchAppStep(),
-        new WaitForAppReadyStep(),
-        new GetAppBaseURLStep(),
-        new ConnectToAppStep(),
-        new RunWorkflowStep(),
-        new TeardownAppStep()
-    ]);
+    /**
+     * Phase 3: Launch app and run test
+     * 
+     * Video strategy: Retain videos of failed app page runs
+     * Artillery playwright integration can record using contextOptions but it
+     * names the videos with random ids and doesn't support `retain-on-failure`.
+     */
+    const appMetricName = normalizeMetricName(selectedAppConfig.appName);
+    const testMetricName = normalizeMetricName(selectedTestConfig.name);
+    const videoFilename = `${username}_${testMetricName}.webm`;
+    const appVideoFilename = `${username}_${appMetricName}_${testMetricName}.webm`;
+
+    let appPage = null;
+    try {
+        await runner.runAll([
+            new LaunchAppStep(),
+            new WaitForAppReadyStep(),
+            new GetAppBaseURLStep(),
+            new ConnectToAppStep(),
+        ]);
+
+        // Capture reference before workflow/teardown closes it
+        appPage = ctx.state.appPage;
+
+        await runner.runAll([
+            new RunWorkflowStep(),
+            new TeardownAppStep()
+        ]);
+
+        try { await page.close(); } catch (_) {}
+        try { await appPage.close(); } catch (_) {}
+        await deleteVideo(page);
+        await deleteVideo(appPage);
+    } catch (error) {
+        if (appPage) {
+            try { await page.close(); } catch (_) {}
+            try { await appPage.close(); } catch (_) {}
+            await saveVideoAs(page, videoFilename);
+            await saveVideoAs(appPage, appVideoFilename);
+        }
+        throw error;
+    }
 
     console.log("Test completed successfully");
 }

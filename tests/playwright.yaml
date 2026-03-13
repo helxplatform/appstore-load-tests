@@ -4,6 +4,12 @@ config:
     playwright:
       launchOptions:
         headless: true
+      contextOptions:
+        recordVideo:
+          dir: ./videos
+          size:
+            width: 1280
+            height: 720
   processor: "../playwright-tests/flows.js"
   payload:
     path: "../payloads/test-users/users_test.txt"
