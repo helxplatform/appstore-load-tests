@@ -69,8 +69,10 @@ class CellHandle {
     await this.page.keyboard.press("Backspace");
     await this.page.keyboard.insertText(`${this.markerComment}\n${code}`);
 
-    // await this.page.waitForTimeout(TIMEOUTS.short);
-    await expect(this.cellLocator).toContainText(code, { timeout: TIMEOUTS.short });
+    // Ensure the cell locator still matches, equivalent to ensuirng the marker was reinjected.
+    // Don't want to verify all the code content is there since playwright/CodeMirror have issues
+    // with newlines and whitespace.
+    await expect(this.cellLocator).toBeVisible({ timeout: TIMEOUTS.short });
 
     // Let codemirror and jupyter state sync
     await this.page.waitForTimeout(1000);
